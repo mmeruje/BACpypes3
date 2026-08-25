@@ -56,10 +56,10 @@ class CmdProfile:
             CmdProfile._debug("    - arg_origin: %r", arg_origin)
 
         # try to convert the value
-        if arg_origin is typing.Union:
-            arg_type_args = typing.get_args(arg_type)
-            if _debug:
-                CmdProfile._debug("    - arg_type_args: %r", arg_type_args)
+        origin = typing.get_origin(arg_type)
+        if origin is Union:
+            last_err: Optional[Exception] = None
+            for arg_subtype in typing.get_args(arg_type):
 
             for arg_subtype in arg_type_args:
                 if _debug:
@@ -73,26 +73,36 @@ class CmdProfile:
                 except Exception as err:
                     if _debug:
                         CmdProfile._debug("    - exception: %r", err)
+                    last_err = err
                     pass
             else:
                 arg_type_names = [
                     arg.__name__
-                    for arg in arg_type.__args__
+                    for arg in typing.get_args(arg_type)
                     if arg is not None.__class__
                 ]
                 if len(arg_type_names) > 1:
+                    expected_msg = f"one of {', '.join(arg_type_names)}"
+                else:
+                    expected_msg = arg_type_names[0]
+
+                if last_err:
                     raise RuntimeError(
-                        f"parameter {arg}: one of {', '.join(arg_type_names)} expected"
+                        f"parameter {arg}: {last_err}: {expected_msg} expected"
                     )
                 else:
-                    raise RuntimeError(f"parameter {arg}: {arg_type_names[0]} expected")
+                    raise RuntimeError(f"parameter {arg}: {expected_msg} expected")
         else:
             try:
                 arg_value = arg_type(raw_arg)
                 return arg_value
             except Exception as err:
+                if (arg_type is not None) and hasattr(arg_type, "__name__"):
+                    arg_type_name = arg_type.__name__
+                else:
+                    arg_type_name = str(arg_type)
                 raise RuntimeError(
-                    f"parameter {arg}: {err}: {arg_type.__name__} expected"
+                    f"parameter {arg}: {err}: {arg_type_name} expected"
                 )
 
     def __call__(self, args: List[str]) -> Tuple[Any, Any, Any]:

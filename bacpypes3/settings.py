@@ -32,6 +32,7 @@ settings = Settings(
     backup_count=5,
     route_aware=False,
     cov_lifetime=60,
+    network_type=None,
 )
 
 
@@ -85,6 +86,9 @@ def dict_settings(**kwargs: Any) -> None:
     already set, otherwise protect against setting type changes.
     """
     for setting_name, kw_value in kwargs.items():
+        # replace hyphens with underscores
+        setting_name = setting_name.replace("-", "_")
+
         cur_value = settings.get(setting_name, None)
 
         if cur_value is None:

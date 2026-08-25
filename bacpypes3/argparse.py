@@ -447,6 +447,12 @@ class SimpleArgumentParser(ArgumentParser):
             default=BACPYPES_DEVICE_ADDRESS,
         )
         self.add_argument(
+            "--network-type",
+            choices=["ipv4", "ipv6"],
+            help="network type",
+            default=None,
+        )
+        self.add_argument(
             "--vendoridentifier",
             type=int,
             help="vendor identifier",
@@ -479,6 +485,10 @@ class SimpleArgumentParser(ArgumentParser):
         # do some error checking
         if (result_args.foreign is not None) and (result_args.bbmd is not None):
             raise RuntimeError("cannot be both a foreign device and a BBMD")
+
+        # update the settings
+        if result_args.network_type:
+            settings.network_type = result_args.network_type
 
         # call the parent to continue expanding
         ArgumentParser.expand_args(self, result_args)

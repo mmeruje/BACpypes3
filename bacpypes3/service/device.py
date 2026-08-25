@@ -120,7 +120,9 @@ class WhoIsFuture:
 
         # filter out those that don't match
         if self.address is not None:
-            if apdu.pduSource != self.address:
+            if (apdu.pduSource != self.address) and (
+                getattr(apdu.pduSource, "addrRoute", None) != self.address
+            ):
                 return
         if (self.low_limit is not None) and (device_instance < self.low_limit):
             return

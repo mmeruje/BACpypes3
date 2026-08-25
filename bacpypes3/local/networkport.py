@@ -4,9 +4,10 @@ Network Port Object
 
 from __future__ import annotations
 
+import socket
 from typing import Callable, Optional
 
-from ..debugging import bacpypes_debugging, ModuleLogger
+from ..debugging import bacpypes_debugging, ModuleLogger, xtob
 from ..pdu import Address, LocalStation, IPv4Address, IPv6Address
 from ..primitivedata import CharacterString, ObjectType
 
@@ -85,7 +86,10 @@ class NetworkPortObject(_Object, _NetworkPortObject):
                     "ipv6Address": addr.packed[:16],
                     "ipv6PrefixLength": addr._prefixlen,
                     "bacnetIPv6UDPPort": addr.addrPort,
-                    # bacnetIPv6MulticastAddress = ? https://en.wikipedia.org/wiki/IPv6_address#Address_scopes
+                    "ipv6ZoneIndex": str(addr.addrTuple[-1]) if addr.addrTuple[-1] else None,
+                    "bacnetIPv6MulticastAddress": xtob(
+                        "FF05000000000000000000000000BAC0"
+                    ),
                     # ipv6DefaultGateway = ?
                     # ipv6DNSServer = [b"\x00" * 16]  # not available or not configured
                 }
@@ -146,7 +150,13 @@ class NetworkPortObject(_Object, _NetworkPortObject):
         elif self.networkType == NetworkType.ipv6:
             if _debug:
                 NetworkPortObject._debug("    - IPv6")
-            raise NotImplementedError("no IPv6 yet")
+
+            addr = socket.inet_ntop(socket.AF_INET6, self.ipv6Address)
+            prefix = str(self.ipv6PrefixLength)
+            port = str(self.bacnetIPv6UDPPort)
+            interface = int(self.ipv6ZoneIndex) if self.ipv6ZoneIndex else None
+
+            return IPv6Address(f"[{addr}/{prefix}]:{port}", interface=interface)
 
         elif self.networkType == NetworkType.virtual:
             if _debug:

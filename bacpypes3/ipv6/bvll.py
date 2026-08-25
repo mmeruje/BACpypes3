@@ -511,7 +511,11 @@ class OriginalUnicastNPDU(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "OriginalUnicastNPDU"),),
+            key_values=(
+                ("function", "OriginalUnicastNPDU"),
+                ("source_virtual_address", self.bvlciSourceVirtualAddress),
+                ("destination_virtual_address", self.bvlciDestinationVirtualAddress),
+            ),
         )
 
         # this message has data
@@ -578,7 +582,11 @@ class OriginalBroadcastNPDU(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "OriginalBroadcastNPDU"),),
+            key_values=(
+                ("function", "AddressResolutionACK"),
+                ("source_virtual_address", self.bvlciSourceVirtualAddress),
+                ("destination_virtual_address", self.bvlciDestinationVirtualAddress),
+            ),
         )
 
         # this message has data
@@ -656,7 +664,11 @@ class AddressResolution(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "AddressResolution"),),
+            key_values=(
+                ("function", "AddressResolution"),
+                ("source_virtual_address", self.bvlciSourceVirtualAddress),
+                ("target_virtual_address", self.bvlciTargetVirtualAddress),
+            ),
         )
 
         # return what we built/updated
@@ -741,7 +753,12 @@ class ForwardedAddressResolution(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "ForwardedAddressResolution"),),
+            key_values=(
+                ("function", "ForwardedAddressResolution"),
+                ("original_source_virtual_address", self.bvlciOriginalSourceVirtualAddress),
+                ("target_virtual_address", self.bvlciTargetVirtualAddress),
+                ("original_source_ipv6_address", self.bvlciOriginalSourceIPv6Address),
+            ),
         )
 
         # return what we built/updated
@@ -883,7 +900,10 @@ class VirtualAddressResolution(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "AddressResolutionACK"),),
+            key_values=(
+                ("function", "VirtualAddressResolution"),
+                ("source_virtual_address", self.bvlciSourceVirtualAddress),
+            ),
         )
 
         # return what we built/updated
@@ -939,7 +959,7 @@ class VirtualAddressResolutionACK(LPDU):
         source_virtual_address = VirtualAddress(pdu.get_data(3))
         destination_virtual_address = VirtualAddress(pdu.get_data(3))
 
-        return AddressResolutionACK(source_virtual_address, destination_virtual_address)
+        return VirtualAddressResolutionACK(source_virtual_address, destination_virtual_address)
 
     def lpdu_contents(
         self,
@@ -958,7 +978,11 @@ class VirtualAddressResolutionACK(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "AddressResolutionACK"),),
+            key_values=(
+                ("function", "VirtualAddressResolutionACK"),
+                ("source_virtual_address", self.bvlciSourceVirtualAddress),
+                ("destination_virtual_address", self.bvlciDestinationVirtualAddress),
+            ),
         )
 
         # return what we built/updated
@@ -1117,7 +1141,11 @@ class RegisterForeignDevice(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "RegisterForeignDevice"),),
+            key_values=(
+                ("function", "RegisterForeignDevice"),
+                ("source_virtual_address", self.bvlciSourceVirtualAddress),
+                ("ttl", self.bvlciTimeToLive),
+            ),
         )
 
         # return what we built/updated
@@ -1192,7 +1220,11 @@ class DeleteForeignDeviceTableEntry(LPDU):
         key_value_contents(
             use_dict=use_dict,
             as_class=as_class,
-            key_values=(("function", "DeleteForeignDeviceTableEntry"),),
+            key_values=(
+                ("function", "DeleteForeignDeviceTableEntry"),
+                ("source_virtual_address", self.bvlciSourceVirtualAddress),
+                ("fdt_entry", self.bvlciFDTEntry),
+            ),
         )
 
         # return what we built/updated
@@ -1201,15 +1233,11 @@ class DeleteForeignDeviceTableEntry(LPDU):
 
 #
 #   DistributeBroadcastToNetwork
-#
 
 
 @register_bvlpdu_type
 class DistributeBroadcastToNetwork(LPDU):
-    _debug_contents: Tuple[str, ...] = (
-        "bvlciSourceVirtualAddress",
-        "bvlciSourceIPv6Address",
-    )
+    _debug_contents: Tuple[str, ...] = ("bvlciSourceVirtualAddress",)
 
     bvlciFunction = LPCI.distributeBroadcastToNetwork
 
@@ -1266,9 +1294,8 @@ class DistributeBroadcastToNetwork(LPDU):
             use_dict=use_dict,
             as_class=as_class,
             key_values=(
-                ("function", "ForwardedNPDU"),
+                ("function", "DistributeBroadcastToNetwork"),
                 ("source_virtual_address", self.bvlciSourceVirtualAddress),
-                ("source_ipv6_address", self.bvlciSourceIPv6Address),
             ),
         )
 
