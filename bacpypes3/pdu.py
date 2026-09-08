@@ -72,7 +72,7 @@ _at_route = (
     + "|"
     + _ipv4_address_port
     + "|"
-    + _ipv6_address_port
+    + _ipv6_address_port_interface
     + "))?"
 )
 
@@ -82,7 +82,7 @@ net_ipv4_address_route_re = re.compile(
     "^([0-9])+:" + _ipv4_address_port + _at_route + "$"
 )
 net_ipv6_address_route_re = re.compile(
-    "^([0-9])+:" + _ipv6_address_port + _at_route + "$"
+    "^([0-9])+:" + _ipv6_address_port_interface + _at_route + "$"
 )
 
 combined_pattern = re.compile(
@@ -91,7 +91,7 @@ combined_pattern = re.compile(
     + "|"
     + _ipv4_address_mask_port
     + "|"
-    + _ipv6_address_port
+    + _ipv6_address_port_interface
     + ")"
     + _at_route
     + "$"
@@ -217,11 +217,13 @@ class AddressMetaclass(type):
                     local_ipv4_port,
                     local_ipv6_addr,
                     local_ipv6_port,
+                    local_ipv6_interface,
                     route_addr,
                     route_ipv4_addr,
                     route_ipv4_port,
                     route_ipv6_addr,
                     route_ipv6_port,
+                    route_ipv6_interface,
                 ) = m.groups()
 
                 net_addr = -1
@@ -300,7 +302,10 @@ class AddressMetaclass(type):
                         local_ipv6_port = "47808"
 
                     address = super(AddressMetaclass, IPv6Address).__call__(
-                        local_ipv6_addr, port=int(local_ipv6_port), **kwargs
+                        local_ipv6_addr,
+                        port=int(local_ipv6_port),
+                        interface=local_ipv6_interface,
+                        **kwargs,
                     )  # type: ignore[misc]
                     if net_addr > 0:
                         address = super(AddressMetaclass, RemoteStation).__call__(
@@ -340,7 +345,8 @@ class AddressMetaclass(type):
                     if not route_ipv6_port:
                         route_ipv6_port = "47808"
                     address.addrRoute = super(AddressMetaclass, IPv6Address).__call__(
-                        (route_ipv6_addr, int(route_ipv6_port))
+                        (route_ipv6_addr, int(route_ipv6_port)),
+                        interface=route_ipv6_interface,
                     )  # type: ignore[misc]
 
                 return address  # type: ignore[no-any-return]
@@ -1696,8 +1702,12 @@ class IPv6Address(Address, ipaddress.IPv6Interface):
     def __str__(self) -> str:
         prefix = str(self.addrNet) + ":[" if self.addrNet else "["
         suffix = "]:" + str(self.addrPort) if (self.addrPort != 47808) else "]"
+        if self.addrTuple[3]:
+            try:
+                suffix += "%" + socket.if_indextoname(self.addrTuple[3])
+            except OSError:
+                pass
         suffix += "@" + str(self.addrRoute) if self.addrRoute else ""
-
         return prefix + self.ip.compressed + suffix
 
 

@@ -61,7 +61,6 @@ class CmdProfile:
             last_err: Optional[Exception] = None
             for arg_subtype in typing.get_args(arg_type):
 
-            for arg_subtype in arg_type_args:
                 if _debug:
                     CmdProfile._debug("    - arg_subtype: %r", arg_subtype)
                 if arg_subtype is None.__class__:
