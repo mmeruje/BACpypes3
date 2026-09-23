@@ -223,6 +223,11 @@ class BIPNormal(BVLLServiceAccessPoint, DebugContents):
             elif isinstance(pdu.pduDestination, VirtualAddress):
                 # destination address is a VirtualAddress
                 destination_ipv6_address = self.vmac_addr_table[pdu.pduDestination]
+            elif len(pdu.pduDestination.addrAddr) == 3:
+                # the NSAP hands down the last leg as a plain LocalStation;
+                # on an IPv6 link this is a 3-byte virtual MAC address
+                pdu.pduDestination = VirtualAddress(pdu.pduDestination.addrAddr)
+                destination_ipv6_address = self.vmac_addr_table[pdu.pduDestination]
             else:
                 BIPNormal._warning(
                     "dropping PDU for incompatible address family: %r",
@@ -552,6 +557,10 @@ class BIPForeign(BVLLServiceAccessPoint, DebugContents):
                     await self.request(xpdu)
                     return
             else:
+                # the NSAP hands down the last leg as a plain LocalStation;
+                # on an IPv6 link this is a 3-byte virtual MAC address
+                if len(pdu.pduDestination.addrAddr) == 3:
+                    pdu.pduDestination = VirtualAddress(pdu.pduDestination.addrAddr)
                 # destination address is a VirtualAddress
                 destination_ipv6_address: IPv6Address = self.vmac_addr_table[
                     pdu.pduDestination

@@ -5,6 +5,8 @@ Link Layer Module
 from __future__ import annotations
 from typing import List, Optional
 
+import socket
+
 from ..debugging import bacpypes_debugging, ModuleLogger
 from ..comm import bind
 from ..pdu import IPv6Address, VirtualAddress
@@ -15,6 +17,13 @@ from .service import BIPNormal, BIPForeign, BIPBBMD, BVLLServiceElement
 # some debugging
 _debug = 0
 _log = ModuleLogger(globals())
+
+def _interface_name(address: IPv6Address) -> Optional[str]:
+    """Derive the interface name from the address if possible."""
+    try:
+        return socket.if_indextoname(address.addrTuple[-1])
+    except (ValueError, OSError):
+        return None
 
 @bacpypes_debugging
 class NormalLinkLayer(BIPNormal):
@@ -46,7 +55,11 @@ class NormalLinkLayer(BIPNormal):
         BIPNormal.__init__(self, virtual_address=virtual_address, **kwargs)
 
         self.codec = BVLLCodec()
-        self.server = IPv6DatagramServer(local_address, multicast_groups=multicast_groups)
+        self.server = IPv6DatagramServer(
+            local_address,
+            multicast_groups=multicast_groups,
+            interface_name=_interface_name(local_address),
+        )
         self.ase = BVLLServiceElement()
 
         bind(self, self.codec, self.server)
@@ -85,7 +98,10 @@ class ForeignLinkLayer(BIPForeign):
         BIPForeign.__init__(self, virtual_address=virtual_address, **kwargs)
 
         self.codec = BVLLCodec()
-        self.server = IPv6DatagramServer(local_address)
+        self.server = IPv6DatagramServer(
+            local_address,
+            interface_name=_interface_name(local_address),
+        )
         self.ase = BVLLServiceElement()
 
         bind(self, self.codec, self.server)
@@ -124,7 +140,10 @@ class BBMDLinkLayer(BIPBBMD):
         BIPBBMD.__init__(self, local_address, virtual_address=virtual_address, **kwargs)
 
         self.codec = BVLLCodec()
-        self.server = IPv6DatagramServer(local_address)
+        self.server = IPv6DatagramServer(
+            local_address,
+            interface_name=_interface_name(local_address),
+        )
         self.ase = BVLLServiceElement()
 
         bind(self, self.codec, self.server)
