@@ -6,6 +6,7 @@ import asyncio
 import socket
 import struct
 import functools
+import time
 
 from typing import Any, Callable, List, Tuple, Optional, Union, cast
 
@@ -13,6 +14,7 @@ from ..debugging import ModuleLogger, bacpypes_debugging
 
 from ..comm import Server
 from ..pdu import LocalBroadcast, IPv6Address, IPv6LinkLocalMulticastAddress, PDU
+from ..settings import settings
 
 # some debugging
 _debug = 0
@@ -20,6 +22,12 @@ _log = ModuleLogger(globals())
 
 # move this to settings sometime
 BACPYPES_ENDPOINT_RETRY_INTERVAL = 1.0
+
+# how often the interface monitor checks the interface
+INTERFACE_MONITOR_INTERVAL = 2.0
+
+# don't repeat the "still gone" warning more often than this
+INTERFACE_GONE_WARNING_INTERVAL = 30.0
 
 
 @bacpypes_debugging
@@ -83,6 +91,9 @@ class IPv6DatagramServer(Server[PDU]):
     protocol: Optional[IPv6DatagramProtocol]
     multicast_transport: Optional[asyncio.DatagramTransport]
     multicast_protocol: Optional[IPv6DatagramProtocol]
+    _monitor_task: Optional[asyncio.Task]
+    interface_monitor: bool
+    interface_rebuild: bool
 
     def __init__(
         self,
@@ -140,7 +151,46 @@ class IPv6DatagramServer(Server[PDU]):
         # a lock so only one rebuild happens at a time
         self._rebuild_lock = asyncio.Lock()
 
+        # interface monitoring and recovery flags (defensive reads)
+        self.interface_monitor = bool(getattr(settings, "interface_monitor", False))
+        self.interface_rebuild = bool(getattr(settings, "interface_rebuild", False))
+
+        # start the transports before monitoring them
         self._start_transports()
+
+        # watch for the interface disappearing or changing index, even when
+        # there is no traffic; only when monitoring is enabled
+        if self.interface_name and self.interface_monitor:
+            self._monitor_task = asyncio.get_running_loop().create_task(
+                self._monitor()
+            )
+        else:
+            self._monitor_task = None
+
+    def _bind_to_interface(self, sock: socket.socket) -> None:
+        """Bind the socket to the network interface (Linux only)."""
+        # only when monitoring is enabled (this is part of monitoring)
+        if not (self.interface_monitor and self.interface_name):
+            return
+        if not hasattr(socket, "SO_BINDTODEVICE"):
+            return
+
+        # the interface name must be a null-terminated byte string
+        try:
+            sock.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_BINDTODEVICE,
+                self.interface_name.encode() + b"\x00",
+            )
+        except OSError as err:
+            # requires privileges; not fatal, just degrade to unbounded
+            IPv6DatagramServer._warning(
+                "could not bind socket to interface %r: %r", self.interface_name, err
+            )
+            if _debug:
+                IPv6DatagramServer._debug(
+                    "    - could not bind socket to device: %r", err
+                )
 
     def _make_local_socket(self, interface_index: int) -> socket.socket:
         """Create and bind a local (unicast) socket for the given interface."""
@@ -160,6 +210,10 @@ class IPv6DatagramServer(Server[PDU]):
 
         # disable multicast loopback
         local_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
+
+        # bind to the socket to the interface so traffic fails as soon as the
+        # interface disappears (Linux only, requires privileges)
+        self._bind_to_interface(local_socket)
 
         # set the multicast interface
         if interface_index:
@@ -189,6 +243,10 @@ class IPv6DatagramServer(Server[PDU]):
         multicast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, "SO_REUSEPORT"):
             multicast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
+        # bind to the socket to the interface so traffic fails as soon as the
+        # interface disappears (Linux only, requires privileges)
+        self._bind_to_interface(multicast_socket)
 
         # join the groups
         for group in self.multicast_groups:
@@ -348,6 +406,53 @@ class IPv6DatagramServer(Server[PDU]):
         # incoming packets on this transport were sent as a local broadcast
         self.multicast_protocol.destination = cast(LocalBroadcast, LocalBroadcast())
 
+    async def _monitor(self) -> None:
+        """Periodically check that the interface is still present.
+
+        This catches interface disappearances while the link is idle, and the
+        interface index changing when it comes back (e.g. 55 -> 56).
+        """
+        while True:
+            await asyncio.sleep(INTERFACE_MONITOR_INTERVAL)
+
+            # if the server was closed, this task is cancelled elsewhere,
+            # but be defensive anyway
+            if self._monitor_task is not None and self._monitor_task.cancelled():
+                return
+
+            try:
+                new_index = socket.if_nametoindex(self.interface_name)
+            except OSError:
+                # gone; if we think she's up, log it and maybe rebuild
+                if self._local_transport_ready.is_set():
+                    IPv6DatagramServer._warning(
+                        "interface %r disappeared", self.interface_name
+                    )
+                    if self.interface_rebuild:
+                        asyncio.create_task(self._rebuild())
+                continue
+
+            # the interface is there; if it was down and just came back, or
+            # the index changed, rebuild
+            if new_index != self.interface_index:
+                IPv6DatagramServer._warning(
+                    "interface %r index changed %r -> %r",
+                    self.interface_name,
+                    self.interface_index,
+                    new_index,
+                )
+                self.interface_index = new_index
+                if self.interface_rebuild and not self._local_transport_ready.is_set():
+                    asyncio.create_task(self._rebuild())
+            elif not self._local_transport_ready.is_set():
+                IPv6DatagramServer._warning(
+                    "interface %r back up (index %r)",
+                    self.interface_name,
+                    new_index,
+                )
+                if self.interface_rebuild:
+                    asyncio.create_task(self._rebuild())
+
     def _protocol_error(self, exc: Exception) -> None:
         """Called by the protocol when the socket raises or is lost; try to recover."""
         if _debug:
@@ -357,7 +462,14 @@ class IPv6DatagramServer(Server[PDU]):
         if not self.interface_name:
             return
 
-        asyncio.create_task(self._rebuild())
+        # warn that the interface has gone away or is erroring
+        IPv6DatagramServer._warning(
+            "interface %r lost/error: %r", self.interface_name, exc
+        )
+
+        # only rebuild if recovery is enabled
+        if self.interface_rebuild:
+            asyncio.create_task(self._rebuild())
 
     async def _rebuild(self) -> None:
         """Close the current transports and bring the interface back up."""
@@ -386,6 +498,13 @@ class IPv6DatagramServer(Server[PDU]):
             try:
                 new_index = socket.if_nametoindex(self.interface_name)
             except OSError:
+                # rate limit the "still gone" warning so it doesn't spam
+                now = time.monotonic()
+                if (now - getattr(self, "_gone_warned_at", 0.0)) >= INTERFACE_GONE_WARNING_INTERVAL:
+                    self._gone_warned_at = now
+                    IPv6DatagramServer._warning(
+                        "interface %r still gone, retrying", self.interface_name
+                    )
                 if _debug:
                     IPv6DatagramServer._debug(
                         "    - interface still gone, retrying later"
@@ -419,6 +538,14 @@ class IPv6DatagramServer(Server[PDU]):
                     BACPYPES_ENDPOINT_RETRY_INTERVAL,
                     lambda: asyncio.create_task(self._rebuild()),
                 )
+                return
+
+            # warn that the interface is back up
+            IPv6DatagramServer._warning(
+                "interface %r rebuilt (index %r)",
+                self.interface_name,
+                self.interface_index,
+            )
 
     async def indication(self, pdu: PDU) -> None:
         if _debug:
@@ -459,9 +586,12 @@ class IPv6DatagramServer(Server[PDU]):
                 assert self.transport
                 self.transport.sendto(pdu.pduData, pdu_destination)
         except OSError as err:
+            IPv6DatagramServer._warning(
+                "interface %r send failed: %r", self.interface_name, err
+            )
             if _debug:
                 IPv6DatagramServer._debug("    - sendto error: %r", err)
-            if self.interface_name:
+            if self.interface_rebuild and self.interface_name:
                 asyncio.create_task(self._rebuild())
 
 
@@ -480,6 +610,11 @@ class IPv6DatagramServer(Server[PDU]):
     def close(self) -> None:
         if _debug:
             IPv6DatagramServer._debug("close")
+
+        # stop the monitor
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            self._monitor_task = None
 
         # close the transports
         if self.transport:

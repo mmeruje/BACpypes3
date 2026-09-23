@@ -33,6 +33,8 @@ settings = Settings(
     route_aware=False,
     cov_lifetime=60,
     network_type=None,
+    interface_monitor=False,
+    interface_rebuild=False,
 )
 
 
@@ -48,6 +50,8 @@ def os_settings() -> None:
         ("backup_count", "BACPYPES_BACKUP_COUNT"),
         ("route_aware", "BACPYPES_ROUTE_AWARE"),
         ("cov_lifetime", "BACPYPES_COV_LIFETIME"),
+        ("interface_monitor", "BACPYPES_INTERFACE_MONITOR"),
+        ("interface_rebuild", "BACPYPES_INTERFACE_REBUILD"),
     ):
         env_value = os.getenv(env_name, None)
         if env_value is not None:
