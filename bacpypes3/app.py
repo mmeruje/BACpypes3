@@ -698,7 +698,15 @@ class Application(
                 if obj.macAddress and (len(obj.macAddress) == 3):
                     virtual_address = VirtualAddress(obj.macAddress)
                 else:
-                    device_instance = self.device_object.objectIdentifier[1]
+                    if self.device_object is not None:
+                        device_instance = self.device_object.objectIdentifier[1]
+                    else:
+                        # there are cases where a device object is not present,
+                        # so use the macAddress to get the device instance
+
+                        # macAddress == ipv6:bac0, remove the last two bytes and convert to int
+                        device_instance = int(obj.macAddress[:-2].hex(), 16)
+
                     virtual_address = VirtualAddress(
                         bytes(
                             [
