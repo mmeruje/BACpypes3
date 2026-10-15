@@ -151,6 +151,9 @@ class IPv6DatagramServer(Server[PDU]):
         # a lock so only one rebuild happens at a time
         self._rebuild_lock = asyncio.Lock()
 
+        # coalesce rebuild requests: at most one in-flight or scheduled retry
+        self._rebuild_pending = False
+
         # interface monitoring and recovery flags (defensive reads)
         self.interface_monitor = bool(getattr(settings, "interface_monitor", False))
         self.interface_rebuild = bool(getattr(settings, "interface_rebuild", False))
@@ -406,6 +409,17 @@ class IPv6DatagramServer(Server[PDU]):
         # incoming packets on this transport were sent as a local broadcast
         self.multicast_protocol.destination = cast(LocalBroadcast, LocalBroadcast())
 
+    def _request_rebuild(self) -> None:
+        """Submit a rebuild request, coalescing duplicates.
+
+        Many events can fire together (monitor tick, send failure, protocol
+        error), so only the first one schedules the rebuild task; the retries
+        scheduled by _rebuild itself keep the recovery going.
+        """
+        if self.interface_rebuild and not self._rebuild_pending:
+            self._rebuild_pending = True
+            asyncio.create_task(self._rebuild())
+
     async def _monitor(self) -> None:
         """Periodically check that the interface is still present.
 
@@ -428,12 +442,13 @@ class IPv6DatagramServer(Server[PDU]):
                     IPv6DatagramServer._warning(
                         "interface %r disappeared", self.interface_name
                     )
-                    if self.interface_rebuild:
-                        asyncio.create_task(self._rebuild())
+                    self._request_rebuild()
                 continue
 
             # the interface is there; if it was down and just came back, or
-            # the index changed, rebuild
+            # the index changed, rebuild.  A changed index means the socket
+            # (IPV6_MULTICAST_IF, scope id) is bound to a stale index even if
+            # the transport still thinks it is ready, so always rebuild.
             if new_index != self.interface_index:
                 IPv6DatagramServer._warning(
                     "interface %r index changed %r -> %r",
@@ -442,16 +457,20 @@ class IPv6DatagramServer(Server[PDU]):
                     new_index,
                 )
                 self.interface_index = new_index
-                if self.interface_rebuild and not self._local_transport_ready.is_set():
-                    asyncio.create_task(self._rebuild())
+                self._request_rebuild()
             elif not self._local_transport_ready.is_set():
-                IPv6DatagramServer._warning(
-                    "interface %r back up (index %r)",
-                    self.interface_name,
-                    new_index,
-                )
-                if self.interface_rebuild:
-                    asyncio.create_task(self._rebuild())
+                # the interface is back but the address isn't there yet (or the
+                # bind keeps failing); rate-limit the warning, keep nudging the
+                # rebuild (coalesced, so no churn)
+                now = time.monotonic()
+                if (now - getattr(self, "_backup_warned_at", 0.0)) >= INTERFACE_GONE_WARNING_INTERVAL:
+                    self._backup_warned_at = now
+                    IPv6DatagramServer._warning(
+                        "interface %r back up, waiting for address (index %r)",
+                        self.interface_name,
+                        new_index,
+                    )
+                self._request_rebuild()
 
     def _protocol_error(self, exc: Exception) -> None:
         """Called by the protocol when the socket raises or is lost; try to recover."""
@@ -467,9 +486,7 @@ class IPv6DatagramServer(Server[PDU]):
             "interface %r lost/error: %r", self.interface_name, exc
         )
 
-        # only rebuild if recovery is enabled
-        if self.interface_rebuild:
-            asyncio.create_task(self._rebuild())
+        self._request_rebuild()
 
     async def _rebuild(self) -> None:
         """Close the current transports and bring the interface back up."""
@@ -509,11 +526,12 @@ class IPv6DatagramServer(Server[PDU]):
                     IPv6DatagramServer._debug(
                         "    - interface still gone, retrying later"
                     )
-                # schedule a retry
+                # schedule a retry (clear the pending flag so it is allowed)
+                self._rebuild_pending = False
                 loop = asyncio.get_running_loop()
                 loop.call_later(
                     BACPYPES_ENDPOINT_RETRY_INTERVAL,
-                    lambda: asyncio.create_task(self._rebuild()),
+                    self._request_rebuild,
                 )
                 return
 
@@ -532,11 +550,12 @@ class IPv6DatagramServer(Server[PDU]):
                     IPv6DatagramServer._debug(
                         "    - could not restart transports: %r", err
                     )
-                # schedule a retry
+                # schedule a retry (clear the pending flag so it is allowed)
+                self._rebuild_pending = False
                 loop = asyncio.get_running_loop()
                 loop.call_later(
                     BACPYPES_ENDPOINT_RETRY_INTERVAL,
-                    lambda: asyncio.create_task(self._rebuild()),
+                    self._request_rebuild,
                 )
                 return
 
@@ -546,6 +565,9 @@ class IPv6DatagramServer(Server[PDU]):
                 self.interface_name,
                 self.interface_index,
             )
+
+            # allow future rebuild requests
+            self._rebuild_pending = False
 
     async def indication(self, pdu: PDU) -> None:
         if _debug:
@@ -591,8 +613,7 @@ class IPv6DatagramServer(Server[PDU]):
             )
             if _debug:
                 IPv6DatagramServer._debug("    - sendto error: %r", err)
-            if self.interface_rebuild and self.interface_name:
-                asyncio.create_task(self._rebuild())
+            self._request_rebuild()
 
 
     async def confirmation(self, pdu: PDU) -> None:
